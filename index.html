@@ -1,0 +1,404 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f2a55">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Pin!">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<title>Footage Location Coupler</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+/* Layout: one-screen app. Map on top, pin log in the middle, record-style Pin button docked at the bottom in thumb reach. */
+:root {
+  --bg: #eef0f5; --surface: #ffffff; --ink: #151a2d; --muted: #5b6278; --line: #dbdfe9;
+  --accent: #283c84; --accent-soft: #e3e8f8; --rec: #d63c2a; --rec-ink: #ffffff;
+  --good: #1f8a4c; --warn: #b7791f; --bad: #c0392b;
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1120; --surface: #171b2c; --ink: #e7e9f2; --muted: #9aa1b8; --line: #283048;
+  --accent: #93a6f0; --accent-soft: #212945; --rec: #ff5a43; --rec-ink: #1a0603;
+  --good: #4cc07c; --warn: #e0a84a; --bad: #ff6b5b; color-scheme: dark;
+} }
+:root[data-theme="dark"] {
+  --bg: #0e1120; --surface: #171b2c; --ink: #e7e9f2; --muted: #9aa1b8; --line: #283048;
+  --accent: #93a6f0; --accent-soft: #212945; --rec: #ff5a43; --rec-ink: #1a0603;
+  --good: #4cc07c; --warn: #e0a84a; --bad: #ff6b5b; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.4 var(--font); display: flex; flex-direction: column; overflow: hidden; }
+button, input { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header { display: flex; align-items: center; gap: 12px; padding: calc(env(safe-area-inset-top, 0px) + 10px) 16px 10px; background: var(--surface); border-bottom: 1px solid var(--line); }
+header h1 { font-size: 15px; margin: 0; font-weight: 650; letter-spacing: .01em; flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+header .count { font: 600 12px var(--mono); color: var(--muted); }
+.menu { position: relative; }
+.menu summary { list-style: none; padding: 6px 12px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; }
+.menu summary::-webkit-details-marker { display: none; }
+.menu-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 1000; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 6px; display: grid; min-width: 210px; box-shadow: 0 10px 30px rgb(0 0 0 / .18); }
+.menu-panel button, .menu-panel label { text-align: left; background: none; border: 0; padding: 10px 12px; border-radius: 6px; font-size: 14px; cursor: pointer; }
+.menu-panel button:hover, .menu-panel label:hover { background: var(--accent-soft); }
+.menu-panel hr { border: 0; border-top: 1px solid var(--line); margin: 4px 0; }
+.menu-panel .danger { color: var(--bad); }
+
+#map { height: 38dvh; min-height: 200px; background: var(--line); flex: none; }
+.leaflet-container { font: 13px var(--font); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9); } }
+:root[data-theme="dark"] .leaflet-tile-pane { filter: invert(1) hue-rotate(180deg) brightness(.9) contrast(.9); }
+.pinicon { background: none; border: 0; }
+.pinicon span { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg); background: var(--rec); border: 2px solid #fff; box-shadow: 0 2px 6px rgb(0 0 0 / .35); }
+.pinicon b { transform: rotate(45deg); color: #fff; font: 700 11px var(--mono); }
+.pinicon.manual span { background: var(--accent); }
+
+#placing { padding: 10px 16px; background: var(--accent); color: var(--surface); display: flex; gap: 12px; align-items: center; font-weight: 600; font-size: 14px; }
+#placing span { flex: 1; }
+#placing button { background: var(--surface); color: var(--accent); border: 0; border-radius: 6px; padding: 6px 12px; font-weight: 600; }
+
+main { flex: 1; overflow-y: auto; padding: 4px 16px 16px; -webkit-overflow-scrolling: touch; }
+.empty { color: var(--muted); padding: 28px 4px; max-width: 40ch; }
+.empty strong { color: var(--ink); display: block; font-size: 16px; margin-bottom: 4px; }
+.day { position: sticky; top: 0; background: var(--bg); padding: 12px 0 6px; font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; z-index: 2; }
+.pins { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.pin { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; display: grid; gap: 6px; }
+.pin.flash { animation: flash 1.2s ease-out; }
+@keyframes flash { from { box-shadow: 0 0 0 3px var(--rec); } to { box-shadow: 0 0 0 3px transparent; } }
+.row1 { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.num { font: 700 13px var(--mono); color: var(--rec); }
+.time { font: 700 20px var(--mono); font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.tz { font: 12px var(--mono); color: var(--muted); }
+.chip { margin-left: auto; font: 600 11px var(--mono); padding: 2px 8px; border-radius: 99px; border: 1px solid currentColor; white-space: nowrap; }
+.chip.good { color: var(--good); } .chip.warn { color: var(--warn); } .chip.bad { color: var(--bad); } .chip.info { color: var(--accent); }
+.coords { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.note { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 6px; padding: 7px 9px; font-size: 14px; }
+.actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.actions button, .actions a { font-size: 13px; font-weight: 600; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--line); background: none; color: var(--accent); text-decoration: none; }
+.actions .del { color: var(--bad); margin-left: auto; }
+
+footer { flex: none; display: flex; align-items: center; gap: 14px; padding: 12px 16px calc(env(safe-area-inset-bottom, 0px) + 14px); background: var(--surface); border-top: 1px solid var(--line); }
+.gps { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.gps .label { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.gps .value { font: 600 14px var(--mono); display: flex; align-items: center; gap: 6px; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.good { background: var(--good); } .dot.warn { background: var(--warn); } .dot.bad { background: var(--bad); }
+.clock { font: 12px var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+#pinBtn { flex: none; width: 104px; height: 104px; border-radius: 50%; border: 5px solid var(--surface); outline: 3px solid var(--rec); outline-offset: 0; background: var(--rec); color: var(--rec-ink); font-size: 24px; font-weight: 800; letter-spacing: .01em; box-shadow: 0 6px 18px rgb(214 60 42 / .35); -webkit-tap-highlight-color: transparent; touch-action: manipulation; transition: transform .08s; }
+#pinBtn:active { transform: scale(.94); }
+
+#toast { position: fixed; left: 16px; right: 16px; bottom: calc(env(safe-area-inset-bottom, 0px) + 140px); margin: 0 auto; max-width: 420px; background: var(--ink); color: var(--bg); padding: 10px 14px; border-radius: 10px; font-size: 14px; z-index: 2000; text-align: center; }
+@media (prefers-reduced-motion: reduce) { .pin.flash { animation: none; } #pinBtn { transition: none; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Footage Location Coupler</h1>
+  <span class="count" id="count">0 pins</span>
+  <details class="menu" id="menu">
+    <summary>Export</summary>
+    <div class="menu-panel">
+      <button id="exCsv">Spreadsheet (.csv)</button>
+      <button id="exGpx">GPS waypoints (.gpx)</button>
+      <button id="exJson">Backup (.json)</button>
+      <hr>
+      <label for="importFile">Restore from backup…</label>
+      <input type="file" id="importFile" accept="application/json,.json" hidden>
+      <button id="fitAll">Show all pins on map</button>
+      <hr>
+      <button id="clearAll" class="danger">Delete all pins</button>
+    </div>
+  </details>
+</header>
+
+<div id="map"></div>
+<div id="placing" hidden><span>Tap the map where this clip was filmed</span><button id="cancelPlace">Cancel</button></div>
+
+<main id="main">
+  <div class="empty" id="empty"><strong>No pins yet</strong>Press <b>Pin!</b> each time you start recording. The exact time and GPS position are saved on this phone, and you can add a note like the clip name afterwards.</div>
+  <div id="days"></div>
+</main>
+
+<footer>
+  <div class="gps">
+    <span class="label">GPS</span>
+    <span class="value"><span class="dot" id="gpsDot"></span><span id="gpsText">Starting…</span></span>
+    <span class="clock" id="clock"></span>
+  </div>
+  <button id="pinBtn" aria-label="Pin current location and time">Pin!</button>
+</footer>
+
+<div id="toast" hidden role="status"></div>
+
+<template id="pinTpl">
+  <li class="pin">
+    <div class="row1"><span class="num"></span><span class="time"></span><span class="tz"></span><span class="chip"></span></div>
+    <div class="coords"></div>
+    <input class="note" type="text" placeholder="Note: clip name, what you filmed…">
+    <div class="actions">
+      <button class="show">Show on map</button>
+      <a class="gmaps" target="_blank" rel="noopener">Google Maps</a>
+      <button class="place">Move</button>
+      <button class="del">Delete</button>
+    </div>
+  </li>
+</template>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const KEY = 'flc.pins.v1';
+const $ = id => document.getElementById(id);
+let pins = load();
+let lastFix = null;       // most recent position from the background GPS watch
+let placingId = null;     // pin waiting for a manual map tap
+let watchId = null;
+
+// ---------- storage ----------
+function load() { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } }
+function save() {
+  try { localStorage.setItem(KEY, JSON.stringify(pins)); }
+  catch { toast('Could not save on this phone. Export a backup now.', 6000); }
+}
+navigator.storage?.persist?.();
+
+// ---------- time formatting (always in the timezone the pin was taken in) ----------
+const pad = n => String(n).padStart(2, '0');
+function localParts(p) {
+  const d = new Date(Date.parse(p.t) + p.tz * 60000);
+  return { y: d.getUTCFullYear(), mo: d.getUTCMonth(), d: d.getUTCDate(), h: d.getUTCHours(), mi: d.getUTCMinutes(), s: d.getUTCSeconds(), wd: d.getUTCDay() };
+}
+function tzLabel(min) { const s = min >= 0 ? '+' : '-', a = Math.abs(min); return `UTC${s}${Math.floor(a / 60)}${a % 60 ? ':' + pad(a % 60) : ''}`; }
+const WD = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'], MO = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const fmtTime = p => { const l = localParts(p); return `${pad(l.h)}:${pad(l.mi)}:${pad(l.s)}`; };
+const fmtDay = p => { const l = localParts(p); return `${WD[l.wd]} ${l.d} ${MO[l.mo]} ${l.y}`; };
+const fmtStamp = p => { const l = localParts(p); return `${l.y}-${pad(l.mo + 1)}-${pad(l.d)} ${pad(l.h)}:${pad(l.mi)}:${pad(l.s)}`; };
+const dayKey = p => fmtStamp(p).slice(0, 10);
+
+// ---------- map ----------
+let map = null, pinLayer = null, route = null, meDot = null, meRing = null;
+if (window.L) {
+  map = L.map('map', { zoomControl: false }).setView([36.2, 138.25], 5);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '© OpenStreetMap' }).addTo(map);
+  route = L.polyline([], { color: '#d63c2a', weight: 2, opacity: .5, dashArray: '4 6' }).addTo(map);
+  pinLayer = L.layerGroup().addTo(map);
+  map.on('click', e => {
+    if (!placingId) return;
+    const p = pins.find(x => x.id === placingId);
+    if (p) { Object.assign(p, { lat: e.latlng.lat, lng: e.latlng.lng, acc: null, status: 'manual' }); save(); render(p.id); toast(`Pin #${numberOf(p)} placed`); }
+    endPlacing();
+  });
+} else {
+  $('map').innerHTML = '<div class="empty" style="padding:16px">Map needs an internet connection to load. Pinning still works.</div>';
+}
+
+function pinIcon(n, manual) {
+  return L.divIcon({ className: 'pinicon' + (manual ? ' manual' : ''), html: `<span><b>${n}</b></span>`, iconSize: [28, 28], iconAnchor: [14, 34], popupAnchor: [0, -30] });
+}
+function renderMap() {
+  if (!map) return;
+  pinLayer.clearLayers();
+  const pts = [];
+  pins.forEach((p, i) => {
+    if (p.lat == null) return;
+    pts.push([p.lat, p.lng]);
+    L.marker([p.lat, p.lng], { icon: pinIcon(i + 1, p.status === 'manual') })
+      .bindPopup(`<b>#${i + 1}</b> · ${fmtDay(p)} ${fmtTime(p)}${p.note ? '<br>' + esc(p.note) : ''}`)
+      .addTo(pinLayer);
+  });
+  route.setLatLngs(pts);
+}
+function fitAll() {
+  const pts = pins.filter(p => p.lat != null).map(p => [p.lat, p.lng]);
+  if (map && pts.length) map.fitBounds(pts, { padding: [40, 40], maxZoom: 16 });
+}
+
+// ---------- list ----------
+const numberOf = p => pins.indexOf(p) + 1;
+function accChip(p) {
+  if (p.status === 'locating') return ['Locating…', 'info'];
+  if (p.status === 'failed') return ['No location', 'bad'];
+  if (p.status === 'manual') return ['Placed by hand', 'info'];
+  const a = Math.round(p.acc);
+  return [`±${a} m`, a <= 25 ? 'good' : a <= 100 ? 'warn' : 'bad'];
+}
+function render(flashId) {
+  $('count').textContent = `${pins.length} pin${pins.length === 1 ? '' : 's'}`;
+  $('empty').hidden = pins.length > 0;
+  const days = $('days'); days.textContent = '';
+  const groups = new Map();
+  [...pins].reverse().forEach(p => { const k = dayKey(p); if (!groups.has(k)) groups.set(k, []); groups.get(k).push(p); });
+  const tpl = $('pinTpl');
+  for (const [, list] of groups) {
+    const h = document.createElement('div'); h.className = 'day';
+    h.innerHTML = '<span></span><span></span>';
+    h.children[0].textContent = fmtDay(list[0]);
+    h.children[1].textContent = `${list.length} pin${list.length === 1 ? '' : 's'}`;
+    const ul = document.createElement('ul'); ul.className = 'pins';
+    for (const p of list) {
+      const li = tpl.content.firstElementChild.cloneNode(true);
+      li.dataset.id = p.id;
+      li.querySelector('.num').textContent = '#' + numberOf(p);
+      li.querySelector('.time').textContent = fmtTime(p);
+      li.querySelector('.tz').textContent = tzLabel(p.tz);
+      const [txt, cls] = accChip(p); const chip = li.querySelector('.chip'); chip.textContent = txt; chip.classList.add(cls);
+      li.querySelector('.coords').textContent = p.lat != null ? `${p.lat.toFixed(6)}, ${p.lng.toFixed(6)}` : (p.err || 'Waiting for GPS…');
+      const note = li.querySelector('.note'); note.value = p.note || ''; note.id = 'note-' + p.id;
+      const g = li.querySelector('.gmaps');
+      if (p.lat != null) g.href = `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}`; else g.hidden = true;
+      li.querySelector('.show').hidden = p.lat == null;
+      li.querySelector('.place').textContent = p.lat == null ? 'Place on map' : 'Move';
+      if (p.id === flashId) li.classList.add('flash');
+      ul.appendChild(li);
+    }
+    days.append(h, ul);
+  }
+  renderMap();
+}
+
+$('days').addEventListener('click', e => {
+  const li = e.target.closest('.pin'); if (!li) return;
+  const p = pins.find(x => x.id === li.dataset.id); if (!p) return;
+  if (e.target.closest('.show') && map) { map.setView([p.lat, p.lng], 17); document.querySelector('header').scrollIntoView(); }
+  if (e.target.closest('.place')) startPlacing(p);
+  if (e.target.closest('.del') && confirm(`Delete pin #${numberOf(p)} (${fmtTime(p)})?`)) { pins = pins.filter(x => x !== p); save(); render(); }
+});
+$('days').addEventListener('change', e => {
+  if (!e.target.classList.contains('note')) return;
+  const p = pins.find(x => x.id === e.target.closest('.pin').dataset.id);
+  if (p) { p.note = e.target.value.trim(); save(); renderMap(); }
+});
+
+function startPlacing(p) {
+  if (!map) return toast('The map needs internet to place pins by hand.');
+  placingId = p.id; $('placing').hidden = false;
+  if (p.lat != null) map.setView([p.lat, p.lng], 16);
+  map.getContainer().style.cursor = 'crosshair';
+}
+function endPlacing() { placingId = null; $('placing').hidden = true; if (map) map.getContainer().style.cursor = ''; }
+$('cancelPlace').onclick = endPlacing;
+
+// ---------- GPS ----------
+function setGps(text, cls) { $('gpsText').textContent = text; $('gpsDot').className = 'dot ' + (cls || ''); }
+function onFix(pos) {
+  lastFix = pos;
+  const a = Math.round(pos.coords.accuracy);
+  setGps(`±${a} m`, a <= 25 ? 'good' : a <= 100 ? 'warn' : 'bad');
+  if (map) {
+    const ll = [pos.coords.latitude, pos.coords.longitude];
+    if (!meDot) {
+      meRing = L.circle(ll, { radius: pos.coords.accuracy, color: '#283c84', weight: 1, fillOpacity: .08 }).addTo(map);
+      meDot = L.circleMarker(ll, { radius: 7, color: '#fff', weight: 2, fillColor: '#3b6cf6', fillOpacity: 1 }).addTo(map);
+      if (!pins.some(p => p.lat != null)) map.setView(ll, 15);
+    } else { meDot.setLatLng(ll); meRing.setLatLng(ll).setRadius(pos.coords.accuracy); }
+  }
+}
+function onGpsErr(err) {
+  setGps(err.code === 1 ? 'Location blocked' : 'Searching…', err.code === 1 ? 'bad' : 'warn');
+  if (err.code === 1) toast('Location is blocked. Allow location for this site in your browser settings.', 6000);
+}
+function startWatch() {
+  if (!('geolocation' in navigator)) return setGps('Not supported', 'bad');
+  if (watchId == null) watchId = navigator.geolocation.watchPosition(onFix, onGpsErr, { enableHighAccuracy: true, maximumAge: 0, timeout: 30000 });
+}
+function stopWatch() { if (watchId != null) { navigator.geolocation.clearWatch(watchId); watchId = null; } }
+document.addEventListener('visibilitychange', () => document.hidden ? stopWatch() : startWatch());
+startWatch();
+
+function getFix() {
+  // A fresh, accurate fix from the running watch is used directly so the pin is instant.
+  if (lastFix && Date.now() - lastFix.timestamp < 5000 && lastFix.coords.accuracy <= 50) return Promise.resolve(lastFix);
+  return new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, maximumAge: 0, timeout: 20000 }));
+}
+
+// ---------- pin ----------
+async function pin() {
+  const now = new Date();   // the moment you pressed, not when GPS answered
+  const p = { id: crypto.randomUUID ? crypto.randomUUID() : String(now.getTime()) + Math.random(), t: now.toISOString(), tz: -now.getTimezoneOffset(), lat: null, lng: null, acc: null, note: '', status: 'locating' };
+  pins.push(p); save(); render(p.id);
+  navigator.vibrate?.(40);
+  $('main').scrollTop = 0;
+  try {
+    if (!('geolocation' in navigator)) throw new Error('GPS not supported');
+    const pos = await getFix();
+    Object.assign(p, { lat: pos.coords.latitude, lng: pos.coords.longitude, acc: pos.coords.accuracy, alt: pos.coords.altitude, status: 'ok' });
+    onFix(pos);
+    toast(`Pin #${numberOf(p)} saved · ${fmtTime(p)}`);
+    navigator.vibrate?.([30, 60, 30]);
+    if (map && !placingId) map.setView([p.lat, p.lng], Math.max(map.getZoom(), 16));
+  } catch (err) {
+    p.status = 'failed';
+    p.err = err.code === 1 ? 'Location blocked: time saved, tap “Place on map”' : 'No GPS fix: time saved, tap “Place on map”';
+    toast(`Pin #${numberOf(p)} has a time but no location. You can place it by hand.`, 5000);
+  }
+  if (pins.includes(p)) { save(); render(); }
+}
+$('pinBtn').addEventListener('click', pin);
+
+// ---------- export / import ----------
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' }[c]));
+const csvCell = v => v == null ? '' : /[",\n]/.test(String(v)) ? `"${String(v).replace(/"/g, '""')}"` : String(v);
+const today = () => new Date().toISOString().slice(0, 10);
+
+function toCsv() {
+  const head = ['pin', 'local_time', 'timezone', 'utc_time', 'latitude', 'longitude', 'accuracy_m', 'source', 'note', 'google_maps'];
+  const rows = pins.map((p, i) => [i + 1, fmtStamp(p), tzLabel(p.tz), p.t, p.lat?.toFixed(6), p.lng?.toFixed(6), p.acc != null ? Math.round(p.acc) : '', p.status === 'manual' ? 'placed by hand' : p.status === 'ok' ? 'gps' : 'none', p.note, p.lat != null ? `https://www.google.com/maps/search/?api=1&query=${p.lat},${p.lng}` : '']);
+  return [head, ...rows].map(r => r.map(csvCell).join(',')).join('\r\n');
+}
+function toGpx() {
+  const wpts = pins.map((p, i) => p.lat == null ? '' :
+    `  <wpt lat="${p.lat}" lon="${p.lng}">${p.alt != null ? `<ele>${p.alt}</ele>` : ''}<time>${p.t}</time><name>#${i + 1} ${fmtTime(p)}</name>${p.note ? `<desc>${esc(p.note)}</desc>` : ''}</wpt>`).filter(Boolean).join('\n');
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<gpx version="1.1" creator="Footage Location Coupler" xmlns="http://www.topografix.com/GPX/1/1">\n${wpts}\n</gpx>\n`;
+}
+async function deliver(name, text, type) {
+  const file = new File([text], name, { type });
+  try {
+    if (navigator.canShare?.({ files: [file] })) { await navigator.share({ files: [file], title: name }); return; }
+  } catch (e) { if (e.name === 'AbortError') return; }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(file); a.download = name;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+function closeMenu() { $('menu').open = false; }
+$('exCsv').onclick = () => { closeMenu(); deliver(`footage-pins-${today()}.csv`, toCsv(), 'text/csv'); };
+$('exGpx').onclick = () => { closeMenu(); deliver(`footage-pins-${today()}.gpx`, toGpx(), 'application/gpx+xml'); };
+$('exJson').onclick = () => { closeMenu(); deliver(`footage-pins-backup-${today()}.json`, JSON.stringify({ app: 'footage-location-coupler', version: 1, pins }, null, 1), 'application/json'); };
+$('fitAll').onclick = () => { closeMenu(); fitAll(); };
+$('importFile').onchange = async e => {
+  closeMenu();
+  const f = e.target.files[0]; e.target.value = ''; if (!f) return;
+  try {
+    const data = JSON.parse(await f.text());
+    const incoming = Array.isArray(data) ? data : data.pins;
+    if (!Array.isArray(incoming)) throw 0;
+    const ids = new Set(pins.map(p => p.id)); let added = 0;
+    for (const p of incoming) if (p && p.id && p.t && !ids.has(p.id)) { pins.push(p); added++; }
+    pins.sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
+    save(); render(); fitAll(); toast(`Restored ${added} pin${added === 1 ? '' : 's'}`);
+  } catch { toast('That file is not a Footage Location Coupler backup.'); }
+};
+$('clearAll').onclick = () => {
+  closeMenu();
+  if (!pins.length) return;
+  if (confirm(`Delete all ${pins.length} pins? Export a backup first if you might need them.`) && confirm('Really delete everything? This cannot be undone.')) { pins = []; save(); render(); }
+};
+document.addEventListener('click', e => { if (!e.target.closest('#menu')) closeMenu(); });
+
+// ---------- misc ----------
+let toastTimer;
+function toast(msg, ms = 2600) { const t = $('toast'); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => t.hidden = true, ms); }
+function tick() { const n = new Date(); $('clock').textContent = `${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())} ${tzLabel(-n.getTimezoneOffset())}`; }
+tick(); setInterval(tick, 1000);
+
+render(); fitAll();
+if ('serviceWorker' in navigator && (location.protocol === 'https:' || location.hostname === 'localhost')) navigator.serviceWorker.register('sw.js');
+</script>
+</body>
+</html>
